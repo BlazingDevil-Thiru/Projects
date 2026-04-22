@@ -24,10 +24,16 @@
                     <i class="fas fa-bolt text-sm"></i>
                 </div>
                 <span class="font-bold text-xl tracking-tight">PayTrack<span class="text-indigo-600">.</span></span>
+                <span id="roomBadge" class="ml-2 text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded-full font-semibold"></span>
             </div>
-            <button onclick="exportToCSV()" class="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-full hover:bg-slate-800 transition-all flex items-center gap-2">
-                <i class="fas fa-download text-xs"></i> Export CSV
-            </button>
+            <div class="flex items-center gap-2">
+                <button onclick="copyShareLink()" class="text-sm font-semibold bg-indigo-600 text-white px-4 py-2 rounded-full hover:bg-indigo-700 transition-all flex items-center gap-2">
+                    <i class="fas fa-share-alt text-xs"></i> Share
+                </button>
+                <button onclick="exportToCSV()" class="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-full hover:bg-slate-800 transition-all flex items-center gap-2">
+                    <i class="fas fa-download text-xs"></i> Export CSV
+                </button>
+            </div>
         </div>
     </nav>
 
@@ -95,10 +101,15 @@
         </div>
 
         <div class="mt-12 flex flex-col items-center gap-4">
-            <p class="text-slate-400 text-xs italic">Data is stored locally in your browser cache.</p>
-            <button onclick="clearData()" class="text-slate-400 hover:text-red-500 text-[10px] font-bold uppercase tracking-[0.2em] transition-colors">
-                <i class="fas fa-trash-alt mr-2"></i> Reset Database
-            </button>
+            <p class="text-slate-400 text-xs italic">Data syncs to cloud. Share your link to collaborate!</p>
+            <div class="flex gap-4">
+                <button onclick="createNewRoom()" class="text-indigo-500 hover:text-indigo-600 text-[10px] font-bold uppercase tracking-[0.2em] transition-colors">
+                    <i class="fas fa-plus mr-2"></i> New Room
+                </button>
+                <button onclick="clearData()" class="text-slate-400 hover:text-red-500 text-[10px] font-bold uppercase tracking-[0.2em] transition-colors">
+                    <i class="fas fa-trash-alt mr-2"></i> Reset Database
+                </button>
+            </div>
         </div>
     </div>
 
@@ -107,8 +118,123 @@
     </div>
 
     <script>
+        // JSONBlob - Simple free cloud storage (no signup needed)
+        const API_BASE = 'https://jsonblob.com/api/jsonBlob';
+        
         let currentViewDate = new Date();
-        let paymentData = JSON.parse(localStorage.getItem('paytrack_v3')) || {};
+        let paymentData = {};
+        let blobId = '';
+        let saveTimeout = null;
+
+        // Get or create blob ID from URL
+        function getBlobId() {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('id');
+        }
+
+        // Update URL with blob ID
+        function updateUrl(id) {
+            const newUrl = `${window.location.pathname}?id=${id}`;
+            window.history.replaceState({}, '', newUrl);
+        }
+
+        // Create new blob
+        async function createBlob(data) {
+            try {
+                const response = await fetch(API_BASE, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const location = response.headers.get('Location');
+                return location ? location.split('/').pop() : null;
+            } catch (e) {
+                console.error('Create error:', e);
+                return null;
+            }
+        }
+
+        // Load blob data
+        async function loadBlob(id) {
+            try {
+                const response = await fetch(`${API_BASE}/${id}`);
+                if (response.ok) return await response.json();
+            } catch (e) {
+                console.error('Load error:', e);
+            }
+            return null;
+        }
+
+        // Save blob data (debounced)
+        function saveBlob() {
+            if (saveTimeout) clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(async () => {
+                if (!blobId) return;
+                try {
+                    await fetch(`${API_BASE}/${blobId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(paymentData)
+                    });
+                } catch (e) {
+                    console.error('Save error:', e);
+                    showToast('Save failed. Check connection.');
+                }
+            }, 500);
+        }
+
+        // Initialize app
+        async function initApp() {
+            blobId = getBlobId();
+            
+            if (blobId) {
+                // Load existing data
+                document.getElementById('roomBadge').innerText = `ID: ${blobId.slice(0,8)}...`;
+                const data = await loadBlob(blobId);
+                if (data) {
+                    paymentData = data;
+                    showToast('Data loaded!');
+                } else {
+                    showToast('Could not load data. Starting fresh.');
+                    paymentData = {};
+                }
+            } else {
+                // Create new blob
+                showToast('Creating new tracker...');
+                const newId = await createBlob({});
+                if (newId) {
+                    blobId = newId;
+                    updateUrl(blobId);
+                    document.getElementById('roomBadge').innerText = `ID: ${blobId.slice(0,8)}...`;
+                    showToast('New tracker created! Share the link.');
+                } else {
+                    showToast('Offline mode - using local storage');
+                    paymentData = JSON.parse(localStorage.getItem('paytrack_local')) || {};
+                }
+            }
+            render();
+        }
+
+        function createNewRoom() {
+            if (confirm('Create a new tracker? You can share the new link with others.')) {
+                window.location.href = window.location.pathname;
+            }
+        }
+
+        function copyShareLink() {
+            const shareUrl = window.location.href;
+            navigator.clipboard.writeText(shareUrl).then(() => {
+                showToast('Link copied! Share it with others.');
+            }).catch(() => {
+                const textArea = document.createElement('textarea');
+                textArea.value = shareUrl;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                showToast('Link copied!');
+            });
+        }
 
         function getColorClass(price) {
             price = parseFloat(price);
@@ -141,8 +267,9 @@
             const amount = inputVal === "" ? 0 : parseFloat(inputVal);
             
             paymentData[dayKey] = amount;
-            localStorage.setItem('paytrack_v3', JSON.stringify(paymentData));
-            showToast(`Updated Day ${dayNum} to ₹${amount}`);
+            saveBlob();
+            localStorage.setItem('paytrack_local', JSON.stringify(paymentData));
+            showToast(`Day ${dayNum} → ₹${amount}`);
             render();
         }
 
@@ -159,7 +286,7 @@
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.setAttribute('href', url);
-            a.setAttribute('download', `PayTrack_Export_${new Date().toISOString().slice(0,10)}.csv`);
+            a.setAttribute('download', `PayTrack_${new Date().toISOString().slice(0,10)}.csv`);
             a.click();
         }
 
@@ -213,16 +340,18 @@
             document.getElementById('statAvg').innerText = '₹' + avg.toLocaleString();
         }
 
-        function clearData() {
-            if(confirm('Are you sure? This will delete all your payment history permanently.')) {
+        async function clearData() {
+            if(confirm('Are you sure? This will delete all payment history permanently.')) {
                 paymentData = {};
-                localStorage.removeItem('paytrack_v3');
+                saveBlob();
+                localStorage.removeItem('paytrack_local');
                 render();
                 showToast("Database Cleared");
             }
         }
 
-        render();
+        // Start the app
+        initApp();
     </script>
 </body>
 </html>
