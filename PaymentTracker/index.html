@@ -33,9 +33,6 @@
                 <button onclick="manualRefresh()" class="text-sm font-semibold bg-emerald-500 text-white px-3 py-2 rounded-full hover:bg-emerald-600 transition-all flex items-center gap-2" title="Sync with cloud">
                     <i class="fas fa-sync-alt text-xs"></i>
                 </button>
-                <button onclick="copyShareLink()" class="text-sm font-semibold bg-indigo-600 text-white px-4 py-2 rounded-full hover:bg-indigo-700 transition-all flex items-center gap-2">
-                    <i class="fas fa-share-alt text-xs"></i> Share
-                </button>
                 <button onclick="exportToCSV()" class="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-full hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-download text-xs"></i> Export CSV
                 </button>
@@ -107,11 +104,8 @@
         </div>
 
         <div class="mt-12 flex flex-col items-center gap-4">
-            <p class="text-slate-400 text-xs italic">Auto-syncs every 5 seconds. Share your link to collaborate!</p>
+            <p class="text-slate-400 text-xs italic">Changes sync instantly across all devices!</p>
             <div class="flex gap-4">
-                <button onclick="createNewRoom()" class="text-indigo-500 hover:text-indigo-600 text-[10px] font-bold uppercase tracking-[0.2em] transition-colors">
-                    <i class="fas fa-plus mr-2"></i> New Room
-                </button>
                 <button onclick="clearData()" class="text-slate-400 hover:text-red-500 text-[10px] font-bold uppercase tracking-[0.2em] transition-colors">
                     <i class="fas fa-trash-alt mr-2"></i> Reset Database
                 </button>
@@ -154,39 +148,12 @@
 
         let currentViewDate = new Date();
         let paymentData = {};
-        let roomId = '';
         let dbRef = null;
-
-        // Get or create room ID from URL
-        function getRoomId() {
-            const urlParams = new URLSearchParams(window.location.search);
-            let room = urlParams.get('room');
-            
-            if (!room) {
-                room = localStorage.getItem('paytrack_last_room');
-                if (!room) {
-                    room = generateRoomId();
-                }
-                updateUrl(room);
-            }
-            
-            localStorage.setItem('paytrack_last_room', room);
-            return room;
-        }
-
-        function generateRoomId() {
-            return Math.random().toString(36).slice(2, 10);
-        }
-
-        function updateUrl(id) {
-            const newUrl = `${window.location.pathname}?room=${id}`;
-            window.history.replaceState({}, '', newUrl);
-        }
 
         // Update sync status indicator
         function updateSyncStatus(status, text) {
             const badge = document.getElementById('roomBadge');
-            badge.innerText = text || roomId.slice(0, 6) + '...';
+            badge.innerText = text || 'Global';
             if (status === 'synced') {
                 badge.className = 'ml-2 text-xs bg-emerald-100 text-emerald-600 px-2 py-1 rounded-full font-semibold';
             } else if (status === 'error') {
@@ -196,19 +163,18 @@
             }
         }
 
-        // Initialize app with Firebase
+        // Initialize app with Firebase - Single shared database for everyone
         function initApp() {
-            roomId = getRoomId();
             updateSyncStatus('loading', '🔄 Connecting...');
             
-            // Reference to this room's data in Firebase
-            dbRef = database.ref('rooms/' + roomId + '/payments');
+            // Single shared database path - everyone sees the same data
+            dbRef = database.ref('shared/payments');
             
             // Real-time listener - automatically syncs when data changes!
             dbRef.on('value', (snapshot) => {
                 paymentData = snapshot.val() || {};
                 localStorage.setItem('paytrack_local', JSON.stringify(paymentData));
-                updateSyncStatus('synced', '✓ ' + roomId.slice(0, 6) + '...');
+                updateSyncStatus('synced', '✓ Live');
                 render();
             }, (error) => {
                 console.error('Firebase error:', error);
@@ -219,7 +185,7 @@
                 showToast('Connection error - using local data');
             });
             
-            showToast('Connected to Firebase!');
+            showToast('Connected! Changes sync everywhere.');
         }
 
         // Save data to Firebase
@@ -228,7 +194,7 @@
             
             dbRef.set(paymentData)
                 .then(() => {
-                    updateSyncStatus('synced', '✓ ' + roomId.slice(0, 6) + '...');
+                    updateSyncStatus('synced', '✓ Live');
                 })
                 .catch((error) => {
                     console.error('Save error:', error);
@@ -238,29 +204,6 @@
             
             // Also save locally as backup
             localStorage.setItem('paytrack_local', JSON.stringify(paymentData));
-        }
-
-        function createNewRoom() {
-            if (confirm('Create a new tracker? You can share the new link with others.')) {
-                if (dbRef) dbRef.off(); // Disconnect from current room
-                localStorage.removeItem('paytrack_last_room');
-                window.location.href = window.location.pathname;
-            }
-        }
-
-        function copyShareLink() {
-            const shareUrl = window.location.href;
-            navigator.clipboard.writeText(shareUrl).then(() => {
-                showToast('Link copied! Share it with others.');
-            }).catch(() => {
-                const textArea = document.createElement('textarea');
-                textArea.value = shareUrl;
-                document.body.appendChild(textArea);
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-                showToast('Link copied!');
-            });
         }
 
         function getColorClass(price) {
@@ -314,7 +257,7 @@
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.setAttribute('href', url);
-            a.setAttribute('download', `PayTrack_${roomId}_${new Date().toISOString().slice(0,10)}.csv`);
+            a.setAttribute('download', `PayTrack_${new Date().toISOString().slice(0,10)}.csv`);
             a.click();
         }
 
