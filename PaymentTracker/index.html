@@ -6,6 +6,9 @@
     <title>PayTrack Pro | Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; transition: background 0.3s ease; }
@@ -121,111 +124,69 @@
     </div>
 
     <script>
-        // Using JSONBin.io - free, CORS-enabled, works with GitHub Pages
-        // Auto-refreshes every 5 seconds to sync changes across users
-        const API_BASE = 'https://api.jsonbin.io/v3/b';
-        const MASTER_KEY = '$2a$10$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; // Public demo key
+        // ============================================
+        // FIREBASE SETUP (One-time - takes 2 minutes)
+        // ============================================
+        // 1. Go to https://console.firebase.google.com
+        // 2. Click "Create a project" → name it anything
+        // 3. Disable Google Analytics (optional) → Create
+        // 4. Click "Build" → "Realtime Database" → "Create Database"
+        // 5. Select your region → "Start in TEST MODE" → Enable
+        // 6. Click the gear icon → "Project settings" → scroll down
+        // 7. Click "</>" (web) → Register app (any name)
+        // 8. Copy your config values below
+        // ============================================
         
+        const firebaseConfig = {
+            apiKey: "AIzaSyAx1um-gt9UvenAMc9DLydu2PqvQYTAANk",
+            authDomain: "paymenttracker-bdde3.firebaseapp.com",
+            databaseURL: "https://paymenttracker-bdde3-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "paymenttracker-bdde3",
+            storageBucket: "paymenttracker-bdde3.firebasestorage.app",
+            messagingSenderId: "274758867273",
+            appId: "1:274758867273:web:fffbecd532fbeb96cb2298",
+            measurementId: "G-435R980JTW"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
         let currentViewDate = new Date();
         let paymentData = {};
-        let binId = '';
-        let saveTimeout = null;
-        let refreshInterval = null;
+        let roomId = '';
+        let dbRef = null;
 
-        // Get bin ID from URL
-        function getBinId() {
+        // Get or create room ID from URL
+        function getRoomId() {
             const urlParams = new URLSearchParams(window.location.search);
-            return urlParams.get('id');
+            let room = urlParams.get('room');
+            
+            if (!room) {
+                room = localStorage.getItem('paytrack_last_room');
+                if (!room) {
+                    room = generateRoomId();
+                }
+                updateUrl(room);
+            }
+            
+            localStorage.setItem('paytrack_last_room', room);
+            return room;
         }
 
-        // Update URL with bin ID
+        function generateRoomId() {
+            return Math.random().toString(36).slice(2, 10);
+        }
+
         function updateUrl(id) {
-            const newUrl = `${window.location.pathname}?id=${id}`;
+            const newUrl = `${window.location.pathname}?room=${id}`;
             window.history.replaceState({}, '', newUrl);
         }
 
-        // Create new bin using JSONBlob (simpler, no API key needed)
-        async function createBin(data) {
-            try {
-                // Try JSONBlob first (no API key needed)
-                const response = await fetch('https://jsonblob.com/api/jsonBlob', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                if (response.ok) {
-                    const location = response.headers.get('Location') || response.headers.get('location');
-                    if (location) return location.split('/').pop();
-                    // Fallback: get ID from response URL
-                    const text = await response.text();
-                    if (response.url.includes('jsonBlob/')) {
-                        return response.url.split('jsonBlob/').pop();
-                    }
-                }
-            } catch (e) {
-                console.error('Create error:', e);
-            }
-            return null;
-        }
-
-        // Load data from cloud
-        async function loadData(id) {
-            try {
-                const response = await fetch(`https://jsonblob.com/api/jsonBlob/${id}`, {
-                    headers: { 'Accept': 'application/json' }
-                });
-                if (response.ok) {
-                    return await response.json();
-                }
-            } catch (e) {
-                console.error('Load error:', e);
-            }
-            return null;
-        }
-
-        // Save data to cloud (debounced)
-        function saveData() {
-            if (saveTimeout) clearTimeout(saveTimeout);
-            saveTimeout = setTimeout(async () => {
-                if (!binId) return;
-                try {
-                    const response = await fetch(`https://jsonblob.com/api/jsonBlob/${binId}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                        body: JSON.stringify(paymentData)
-                    });
-                    if (response.ok) {
-                        updateSyncStatus('synced');
-                    } else {
-                        throw new Error('Save failed');
-                    }
-                } catch (e) {
-                    console.error('Save error:', e);
-                    updateSyncStatus('error');
-                    showToast('Save failed - changes saved locally');
-                }
-            }, 800);
-        }
-
-        // Refresh data from cloud (for real-time sync)
-        async function refreshData() {
-            if (!binId) return;
-            try {
-                const data = await loadData(binId);
-                if (data && JSON.stringify(data) !== JSON.stringify(paymentData)) {
-                    paymentData = data;
-                    localStorage.setItem('paytrack_local', JSON.stringify(paymentData));
-                    render();
-                    updateSyncStatus('synced');
-                }
-            } catch (e) {
-                console.error('Refresh error:', e);
-            }
-        }
-
         // Update sync status indicator
-        function updateSyncStatus(status) {
+        function updateSyncStatus(status, text) {
             const badge = document.getElementById('roomBadge');
+            badge.innerText = text || roomId.slice(0, 6) + '...';
             if (status === 'synced') {
                 badge.className = 'ml-2 text-xs bg-emerald-100 text-emerald-600 px-2 py-1 rounded-full font-semibold';
             } else if (status === 'error') {
@@ -235,64 +196,54 @@
             }
         }
 
-        // Initialize app
-        async function initApp() {
-            binId = getBinId();
+        // Initialize app with Firebase
+        function initApp() {
+            roomId = getRoomId();
+            updateSyncStatus('loading', '🔄 Connecting...');
             
-            // Load local backup first for instant display
-            const localData = JSON.parse(localStorage.getItem('paytrack_local')) || {};
+            // Reference to this room's data in Firebase
+            dbRef = database.ref('rooms/' + roomId + '/payments');
             
-            if (binId) {
-                document.getElementById('roomBadge').innerText = `🔄 ${binId.slice(0,6)}...`;
-                
-                // Try to load from cloud
-                const cloudData = await loadData(binId);
-                if (cloudData) {
-                    paymentData = cloudData;
-                    localStorage.setItem('paytrack_local', JSON.stringify(paymentData));
-                    document.getElementById('roomBadge').innerText = `✓ ${binId.slice(0,6)}...`;
-                    updateSyncStatus('synced');
-                    showToast('Synced with cloud!');
-                } else {
-                    // Cloud failed, use local
-                    paymentData = localData;
-                    document.getElementById('roomBadge').innerText = `⚠ Offline`;
-                    updateSyncStatus('error');
-                    showToast('Offline mode - using local data');
-                }
-            } else {
-                // Create new tracker
-                showToast('Creating new tracker...');
-                document.getElementById('roomBadge').innerText = `Creating...`;
-                
-                const newId = await createBin({});
-                if (newId) {
-                    binId = newId;
-                    updateUrl(binId);
-                    document.getElementById('roomBadge').innerText = `✓ ${binId.slice(0,6)}...`;
-                    updateSyncStatus('synced');
-                    showToast('New tracker created! Share the link.');
-                } else {
-                    // Fallback to local-only mode with random ID
-                    binId = 'local_' + Math.random().toString(36).slice(2, 10);
-                    updateUrl(binId);
-                    paymentData = localData;
-                    document.getElementById('roomBadge').innerText = `📱 Local only`;
-                    showToast('Cloud unavailable. Using local storage.');
-                }
-            }
+            // Real-time listener - automatically syncs when data changes!
+            dbRef.on('value', (snapshot) => {
+                paymentData = snapshot.val() || {};
+                localStorage.setItem('paytrack_local', JSON.stringify(paymentData));
+                updateSyncStatus('synced', '✓ ' + roomId.slice(0, 6) + '...');
+                render();
+            }, (error) => {
+                console.error('Firebase error:', error);
+                updateSyncStatus('error', '⚠ Offline');
+                // Fallback to local storage
+                paymentData = JSON.parse(localStorage.getItem('paytrack_local')) || {};
+                render();
+                showToast('Connection error - using local data');
+            });
             
-            render();
+            showToast('Connected to Firebase!');
+        }
+
+        // Save data to Firebase
+        function saveData() {
+            if (!dbRef) return;
             
-            // Start auto-refresh every 5 seconds for real-time sync
-            if (!binId.startsWith('local_')) {
-                refreshInterval = setInterval(refreshData, 5000);
-            }
+            dbRef.set(paymentData)
+                .then(() => {
+                    updateSyncStatus('synced', '✓ ' + roomId.slice(0, 6) + '...');
+                })
+                .catch((error) => {
+                    console.error('Save error:', error);
+                    updateSyncStatus('error', '⚠ Save failed');
+                    showToast('Save failed - check connection');
+                });
+            
+            // Also save locally as backup
+            localStorage.setItem('paytrack_local', JSON.stringify(paymentData));
         }
 
         function createNewRoom() {
             if (confirm('Create a new tracker? You can share the new link with others.')) {
-                clearInterval(refreshInterval);
+                if (dbRef) dbRef.off(); // Disconnect from current room
+                localStorage.removeItem('paytrack_last_room');
                 window.location.href = window.location.pathname;
             }
         }
@@ -342,11 +293,11 @@
             const inputVal = document.getElementById('priceInput').value;
             const amount = inputVal === "" ? 0 : parseFloat(inputVal);
             
-            paymentData[dayKey] = amount;
+            // Use underscore instead of dash for Firebase keys
+            const fbKey = dayKey.replace(/-/g, '_');
+            paymentData[fbKey] = amount;
             saveData();
-            localStorage.setItem('paytrack_local', JSON.stringify(paymentData));
             showToast(`Day ${dayNum} → ₹${amount}`);
-            render();
         }
 
         function exportToCSV() {
@@ -356,13 +307,14 @@
             }
             let csv = "Date,Amount\n";
             Object.keys(paymentData).sort().forEach(key => {
-                csv += `${key},${paymentData[key]}\n`;
+                const dateKey = key.replace(/_/g, '-');
+                csv += `${dateKey},${paymentData[key]}\n`;
             });
             const blob = new Blob([csv], { type: 'text/csv' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.setAttribute('href', url);
-            a.setAttribute('download', `PayTrack_${new Date().toISOString().slice(0,10)}.csv`);
+            a.setAttribute('download', `PayTrack_${roomId}_${new Date().toISOString().slice(0,10)}.csv`);
             a.click();
         }
 
@@ -384,7 +336,8 @@
 
             for (let d = 1; d <= daysInMonth; d++) {
                 const dayKey = `${year}-${month}-${d}`;
-                const savedPrice = paymentData[dayKey];
+                const fbKey = `${year}_${month}_${d}`;
+                const savedPrice = paymentData[fbKey];
                 const hasValue = savedPrice !== undefined;
                 const colorClass = hasValue ? getColorClass(savedPrice) : 'bg-white border-slate-100 hover:bg-slate-50 text-slate-300';
                 
@@ -404,7 +357,7 @@
             const month = currentViewDate.getMonth();
             
             const monthlyEntries = Object.entries(paymentData)
-                .filter(([key]) => key.startsWith(`${year}-${month}-`))
+                .filter(([key]) => key.startsWith(`${year}_${month}_`))
                 .map(([, value]) => value);
 
             const total = monthlyEntries.reduce((a, b) => a + b, 0);
@@ -416,20 +369,29 @@
             document.getElementById('statAvg').innerText = '₹' + avg.toLocaleString();
         }
 
-        async function clearData() {
+        function clearData() {
             if(confirm('Are you sure? This will delete all payment history permanently.')) {
                 paymentData = {};
-                saveData();
+                if (dbRef) {
+                    dbRef.remove()
+                        .then(() => showToast('Database Cleared'))
+                        .catch((e) => showToast('Clear failed'));
+                }
                 localStorage.removeItem('paytrack_local');
                 render();
-                showToast("Database Cleared");
             }
         }
 
-        // Manual refresh button
+        // Manual refresh
         function manualRefresh() {
             showToast('Refreshing...');
-            refreshData();
+            if (dbRef) {
+                dbRef.once('value').then((snapshot) => {
+                    paymentData = snapshot.val() || {};
+                    render();
+                    showToast('Refreshed!');
+                });
+            }
         }
 
         // Start the app
